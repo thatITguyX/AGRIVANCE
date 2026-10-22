@@ -1,4 +1,6 @@
-import React, { useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
+import { countryCodes, normalizePhoneNumber, toParticipantRecord, validateParticipant } from './domain/participant.js';
+import { supabase } from './lib/supabase.js';
 
 const navigation = [
   {
@@ -144,7 +146,7 @@ function getStageTone(stage) {
   return 'neutral';
 }
 
-function Sidebar({ active, onNavigate, collapsed, onToggle, mobileOpen }) {
+function Sidebar({ active, onNavigate, collapsed, onToggle, mobileOpen, liveMode = false }) {
   return (
     <aside className={`sidebar ${collapsed ? 'sidebar-collapsed' : ''} ${mobileOpen ? 'sidebar-mobile-open' : ''}`}>
       <div className="brand">
@@ -161,16 +163,16 @@ function Sidebar({ active, onNavigate, collapsed, onToggle, mobileOpen }) {
             {group.items.map(([label, icon, count]) => (
               <button className={`nav-item ${active === label ? 'nav-item-active' : ''}`} key={label} onClick={() => onNavigate(label)} title={label} aria-label={label}>
                 <Icon>{icon}</Icon>
-                {!collapsed && <><span className="nav-label">{label}</span>{count && <span className="nav-count">{count}</span>}</>}
-                {collapsed && count && <span className="nav-dot" />}
+                {!collapsed && <><span className="nav-label">{label}</span>{count && !liveMode && <span className="nav-count">{count}</span>}</>}
+                {collapsed && count && !liveMode && <span className="nav-dot" />}
               </button>
             ))}
           </section>
         ))}
       </div>
       {!collapsed && <div className="sidebar-footer">
-        <div className="offline-status"><span className="status-dot" /><div><strong>All systems operational</strong><small>Last synced 2 minutes ago</small></div></div>
-        <div className="sidebar-version">AGRIVANCE <span>DEMO ENVIRONMENT</span></div>
+        <div className="offline-status"><span className="status-dot" /><div><strong>{liveMode ? 'Authenticated workspace' : 'All systems operational'}</strong><small>{liveMode ? 'Database features in progress' : 'Last synced 2 minutes ago'}</small></div></div>
+        <div className="sidebar-version">AGRIVANCE <span>{liveMode ? 'LIVE WORKSPACE' : 'DEMO ENVIRONMENT'}</span></div>
       </div>}
     </aside>
   );
@@ -222,7 +224,7 @@ function Homepage({ onOpenDashboard, onOpenParticipants }) {
   </div>;
 }
 
-function Topbar({ country, onCountryChange, onSearch, onNotify, notificationsOpen, onProfile, profileOpen, onToggleMenu }) {
+function Topbar({ country, onCountryChange, onSearch, onNotify, notificationsOpen, onProfile, profileOpen, onToggleMenu, user, onSignOut, liveMode = false, allowedCountries = countries }) {
   return (
     <header className="topbar">
       <button className="mobile-menu-button" onClick={onToggleMenu} aria-label="Open navigation menu">☰</button>
@@ -231,23 +233,25 @@ function Topbar({ country, onCountryChange, onSearch, onNotify, notificationsOpe
         <label className="country-select">
           <Icon>⌖</Icon>
           <select aria-label="Program country" value={country} onChange={(event) => onCountryChange(event.target.value)}>
-            {countries.map((item) => <option key={item}>{item}</option>)}
+            {allowedCountries.map((item) => <option key={item}>{item}</option>)}
           </select>
           <span className="select-chevron">⌄</span>
         </label>
         <button className="top-icon-button search-trigger" onClick={onSearch} aria-label="Search"><Icon>⌕</Icon><span>Search</span><kbd>⌘ K</kbd></button>
         <div className="popover-anchor">
-          <button className={`top-icon-button icon-only ${notificationsOpen ? 'button-selected' : ''}`} onClick={onNotify} aria-label="Notifications"><Icon>♧</Icon><i className="notification-dot" /></button>
-          {notificationsOpen && <div className="popover notification-popover"><div className="popover-title"><strong>Notifications</strong><span>3 new</span></div><div className="notification-item"><span className="notification-symbol warning">!</span><div><strong>6 records need review</strong><small>Data quality · 24 minutes ago</small></div></div><div className="notification-item"><span className="notification-symbol green">↻</span><div><strong>Sync completed</strong><small>Field operations · 1 hour ago</small></div></div><div className="notification-item"><span className="notification-symbol blue">↗</span><div><strong>Quarterly report is ready</strong><small>Reports · Yesterday</small></div></div><button className="popover-link" onClick={onNotify}>Close notifications</button></div>}
+          <button className={`top-icon-button icon-only ${notificationsOpen ? 'button-selected' : ''}`} onClick={onNotify} aria-label="Notifications"><Icon>♧</Icon>{!liveMode && <i className="notification-dot" />}</button>
+          {notificationsOpen && (liveMode
+            ? <div className="popover notification-popover"><div className="popover-title"><strong>Notifications</strong></div><p className="live-state">Notifications are not connected to live system events yet.</p><button className="popover-link" onClick={onNotify}>Close notifications</button></div>
+            : <div className="popover notification-popover"><div className="popover-title"><strong>Notifications</strong><span>3 new</span></div><div className="notification-item"><span className="notification-symbol warning">!</span><div><strong>6 records need review</strong><small>Data quality · 24 minutes ago</small></div></div><div className="notification-item"><span className="notification-symbol green">↻</span><div><strong>Sync completed</strong><small>Field operations · 1 hour ago</small></div></div><div className="notification-item"><span className="notification-symbol blue">↗</span><div><strong>Quarterly report is ready</strong><small>Reports · Yesterday</small></div></div><button className="popover-link" onClick={onNotify}>Close notifications</button></div>)}
         </div>
         <div className="topbar-divider" />
         <div className="popover-anchor">
           <button className="profile-button" onClick={onProfile} aria-expanded={profileOpen}>
-            <span className="avatar avatar-user">SM</span>
-            <span className="profile-copy"><strong>Sarah Mensah</strong><small>Program manager</small></span>
+            <span className="avatar avatar-user">{user ? user.email?.slice(0, 2).toUpperCase() : 'SM'}</span>
+            <span className="profile-copy"><strong>{user?.email || 'Sarah Mensah'}</strong><small>{user ? 'Signed-in user' : 'Program manager'}</small></span>
             <span className="select-chevron">⌄</span>
           </button>
-          {profileOpen && <div className="popover profile-popover"><strong>Sarah Mensah</strong><span>Program manager · All countries</span><button onClick={onProfile}>Close profile menu</button></div>}
+          {profileOpen && <div className="popover profile-popover"><strong>{user?.email || 'Sarah Mensah'}</strong><span>{user ? 'Authenticated workspace' : 'Program manager · All countries'}</span>{user ? <button onClick={onSignOut}>Sign out</button> : <button onClick={onProfile}>Close profile menu</button>}</div>}
         </div>
       </div>
     </header>
@@ -453,50 +457,139 @@ function RecordsPage({ section, country, participants, onSelectParticipant, onAd
   </div>;
 }
 
-function ParticipantModal({ onClose, onSave }) {
-  const [form, setForm] = useState({ firstName: '', lastName: '', country: 'Nigeria', location: '', phone: '', enterprise: '' });
-  const [error, setError] = useState('');
+function ParticipantModal({ onClose, onSave, error, demoMode = false, allowedCountries = ['Nigeria', 'Ghana', 'Kenya'] }) {
+  const [form, setForm] = useState({ firstName: '', lastName: '', country: allowedCountries[0] || 'Nigeria', location: '', phone: '', enterprise: '', consent: false });
+  const [errors, setErrors] = useState({});
+  const [saving, setSaving] = useState(false);
   const update = (key) => (event) => setForm((current) => ({ ...current, [key]: event.target.value }));
-  const submit = (event) => {
+  const submit = async (event) => {
     event.preventDefault();
-    if (!form.firstName.trim() || !form.lastName.trim() || !form.location.trim()) {
-      setError('Enter the participant’s first name, last name, and location.');
+    const nextErrors = validateParticipant(form);
+    setErrors(nextErrors);
+    if (Object.keys(nextErrors).length) {
       return;
     }
-    onSave(form);
+    setSaving(true);
+    try {
+      const saved = await onSave(form);
+      if (!saved) setSaving(false);
+    } catch (saveError) {
+      setSaving(false);
+      throw saveError;
+    }
   };
   return <div className="modal-backdrop" onMouseDown={(event) => { if (event.target === event.currentTarget) onClose(); }}>
     <section className="modal" role="dialog" aria-modal="true" aria-labelledby="participant-modal-title">
       <div className="modal-header"><div><span className="modal-kicker">PARTICIPANT REGISTRATION</span><h2 id="participant-modal-title">Add a participant</h2><p>Create a new fictional demo record.</p></div><button className="modal-close" onClick={onClose} aria-label="Close dialog">×</button></div>
       <form onSubmit={submit}>
         <div className="form-grid">
-          <label>First name <span>*</span><input autoFocus value={form.firstName} onChange={update('firstName')} placeholder="e.g. Amina" /></label>
-          <label>Last name <span>*</span><input value={form.lastName} onChange={update('lastName')} placeholder="e.g. Yusuf" /></label>
-          <label>Country <span>*</span><select value={form.country} onChange={update('country')}><option>Nigeria</option><option>Ghana</option><option>Kenya</option></select></label>
-          <label>Location <span>*</span><input value={form.location} onChange={update('location')} placeholder="District or region" /></label>
-          <label>Phone number <small>Optional</small><input value={form.phone} onChange={update('phone')} placeholder="+234 000 000 0000" /></label>
+          <label>First name <span>*</span><input autoFocus value={form.firstName} onChange={update('firstName')} placeholder="e.g. Amina" aria-invalid={!!errors.firstName} />{errors.firstName && <small className="field-error">{errors.firstName}</small>}</label>
+          <label>Last name <span>*</span><input value={form.lastName} onChange={update('lastName')} placeholder="e.g. Yusuf" aria-invalid={!!errors.lastName} />{errors.lastName && <small className="field-error">{errors.lastName}</small>}</label>
+          <label>Country <span>*</span><select value={form.country} onChange={update('country')}>{allowedCountries.map((item) => <option key={item}>{item}</option>)}</select></label>
+          <label>Location <span>*</span><input value={form.location} onChange={update('location')} placeholder="District or region" aria-invalid={!!errors.location} />{errors.location && <small className="field-error">{errors.location}</small>}</label>
+          <label>Phone number <small>Optional</small><input type="tel" value={form.phone} onChange={update('phone')} placeholder={form.country === 'Ghana' ? '+233 000 000 000' : form.country === 'Kenya' ? '+254 000 000 000' : '+234 000 000 0000'} aria-invalid={!!errors.phone} />{errors.phone && <small className="field-error">{errors.phone}</small>}</label>
           <label>Enterprise <small>Optional</small><input value={form.enterprise} onChange={update('enterprise')} placeholder="Enterprise name" /></label>
         </div>
+        <label className="consent-field"><input type="checkbox" checked={form.consent} onChange={(event) => setForm((current) => ({ ...current, consent: event.target.checked }))} /> I have recorded the participant's consent to store this information. <span>*</span></label>
+        {errors.consent && <small className="field-error">{errors.consent}</small>}
         {error && <div className="form-error" role="alert">{error}</div>}
-        <div className="modal-privacy"><span>ⓘ</span><span>Use fictional details only. This demo form stores records in your browser session and does not submit to a server.</span></div>
-        <div className="modal-actions"><button type="button" className="button button-secondary" onClick={onClose}>Cancel</button><button className="button button-primary" type="submit">Save participant</button></div>
+        <div className="modal-privacy"><span>ⓘ</span><span>{demoMode ? 'Development demo only: this record stays in temporary browser memory and is fictional. Never enter real participant information.' : 'Participant details are sent only to the configured authenticated database. Do not submit information until your organization has approved its collection and retention.'}</span></div>
+        <div className="modal-actions"><button type="button" className="button button-secondary" onClick={onClose} disabled={saving}>Cancel</button><button className="button button-primary" type="submit" disabled={saving}>{saving ? 'Saving…' : 'Save participant'}</button></div>
       </form>
     </section>
   </div>;
 }
 
-function ParticipantDetail({ participant, onClose }) {
+function ParticipantDetail({ participant, onClose, demoMode = false }) {
   return <div className="modal-backdrop" onMouseDown={(event) => { if (event.target === event.currentTarget) onClose(); }}><section className="modal detail-modal" role="dialog" aria-modal="true" aria-labelledby="detail-title">
-    <div className="modal-header"><div><span className="modal-kicker">PARTICIPANT PROFILE · {participant.id}</span><h2 id="detail-title">{participant.name}</h2><p>Fictional demonstration record · {participant.country}</p></div><button className="modal-close" onClick={onClose} aria-label="Close profile">×</button></div>
+    <div className="modal-header"><div><span className="modal-kicker">PARTICIPANT PROFILE · {participant.id}</span><h2 id="detail-title">{participant.name}</h2><p>{demoMode ? 'Fictional demonstration record · ' : ''}{participant.country}</p></div><button className="modal-close" onClick={onClose} aria-label="Close profile">×</button></div>
     <div className="detail-status"><Badge tone={getStageTone(participant.stage)}><i />{participant.stage}</Badge><span>Last activity {participant.updated}</span></div>
-    <div className="detail-grid"><div><small>LOCATION</small><strong>{participant.location}</strong></div><div><small>AGE</small><strong>{participant.age} years</strong></div><div><small>ENTERPRISE</small><strong>{participant.enterprise}</strong></div><div><small>LAST SERVICE</small><strong>{participant.service}</strong></div></div>
-    <div className="detail-timeline"><h3>Program journey</h3><div><i /><span><strong>Participant record updated</strong><small>{participant.updated}</small></span></div><div><i /><span><strong>{participant.service}</strong><small>Program service recorded · Fictional</small></span></div><div><i /><span><strong>Enrolled in AGRIVANCE program</strong><small>Program lifecycle event · Fictional</small></span></div></div>
+    <div className="detail-grid"><div><small>LOCATION</small><strong>{participant.location}</strong></div><div><small>AGE</small><strong>{participant.age == null ? 'Not recorded' : `${participant.age} years`}</strong></div><div><small>ENTERPRISE</small><strong>{participant.enterprise}</strong></div><div><small>LAST SERVICE</small><strong>{participant.service}</strong></div></div>
+    {demoMode && <div className="detail-timeline"><h3>Program journey</h3><div><i /><span><strong>Participant record updated</strong><small>{participant.updated}</small></span></div><div><i /><span><strong>{participant.service}</strong><small>Program service recorded · Fictional</small></span></div><div><i /><span><strong>Enrolled in AGRIVANCE program</strong><small>Program lifecycle event · Fictional</small></span></div></div>}
     <div className="modal-actions"><button className="button button-secondary" onClick={onClose}>Close profile</button></div>
   </section></div>;
 }
 
 function SearchModal({ onClose, value, onChange, onNavigate }) {
   return <div className="modal-backdrop search-backdrop" onMouseDown={(event) => { if (event.target === event.currentTarget) onClose(); }}><section className="global-search" role="dialog" aria-modal="true" aria-label="Global search"><div className="global-search-input"><Icon>⌕</Icon><input autoFocus placeholder="Search participants, enterprises, reports..." value={value} onChange={(event) => onChange(event.target.value)} /><kbd>ESC</kbd><button onClick={onClose} aria-label="Close search">×</button></div><div className="search-suggestions"><small>QUICK NAVIGATION</small>{['Participants', 'Applications', 'Enterprises', 'Reports'].map((item) => <button key={item} onClick={() => { onNavigate(item); onClose(); }}><span>⌕</span>{item}<kbd>↵</kbd></button>)}</div></section></div>;
+}
+
+function SignInPage({ onSignIn, onCancel, error }) {
+  const [email, setEmail] = useState('');
+  const [password, setPassword] = useState('');
+  const [pending, setPending] = useState(false);
+
+  const submit = async (event) => {
+    event.preventDefault();
+    setPending(true);
+    await onSignIn(email.trim(), password);
+    setPending(false);
+  };
+
+  return <main className="auth-page">
+    <form className="auth-card" onSubmit={submit}>
+      <AgrivanceMark />
+      <span className="modal-kicker">SECURE WORKSPACE</span>
+      <h1>Team sign in</h1>
+      <p>Use your organization-provisioned AGRIVANCE account.</p>
+      <label>Email address<input type="email" autoComplete="username" required value={email} onChange={(event) => setEmail(event.target.value)} /></label>
+      <label>Password<input type="password" autoComplete="current-password" required value={password} onChange={(event) => setPassword(event.target.value)} /></label>
+      {error && <div className="form-error" role="alert">{error}</div>}
+      <button className="button button-primary" type="submit" disabled={pending}>{pending ? 'Signing in…' : 'Sign in'}</button>
+      <button className="auth-cancel" type="button" onClick={onCancel}>Back to AGRIVANCE</button>
+      <small>Accounts are provisioned by an administrator. Public registration is disabled.</small>
+    </form>
+  </main>;
+}
+
+function ConfigurationNotice({ onBack }) {
+  return <main className="auth-page"><section className="auth-card" role="status">
+    <AgrivanceMark />
+    <span className="modal-kicker">WORKSPACE NOT CONFIGURED</span>
+    <h1>Secure services are unavailable</h1>
+    <p>This deployment has no configured authentication and database connection. The admin workspace is disabled rather than showing sample data as real records.</p>
+    <button className="button button-secondary" onClick={onBack}>Back to public site</button>
+    <small>An administrator must configure the Supabase environment variables and apply the database migration before enabling live operations.</small>
+  </section></main>;
+}
+
+function ProductionModuleNotice({ section }) {
+  return <main className="page-content">
+    <div className="page-heading"><div><div className="eyebrow"><span className="eyebrow-dot" /> PROGRAM OPERATIONS</div><h1>{section}</h1><p>This module is not connected to a live data workflow yet.</p></div></div>
+    <div className="module-note"><span>ⓘ</span><div><strong>No live records or actions are available</strong><p>This workspace will not display the prototype's fictional records in a configured environment. The module needs its database schema, scoped permissions, and verified workflow before activation.</p></div></div>
+  </main>;
+}
+
+function LiveDashboard({ country, totalParticipants, loading, error, onRetry, participants, onSelect, onOpenParticipants, onAddParticipant, canRegister }) {
+  return <div className="page-content dashboard-page">
+    <div className="page-heading"><div><div className="eyebrow"><span className="eyebrow-dot" /> LIVE WORKSPACE</div><h1>Program overview</h1><p>Figures below come from authorized participant records in the database.</p></div><div className="heading-actions">{canRegister && <button className="button button-primary" onClick={onAddParticipant}>＋ Register participant</button>}</div></div>
+    <section className="stats-grid" aria-label="Program key metrics">
+      <article className="stat-card live-stat"><div className="stat-top"><span className="stat-label">Registered participants</span><span className="stat-icon stat-green">♙</span></div><div className="stat-value">{loading ? '…' : error ? '—' : totalParticipants}</div><div className="stat-foot"><span>Database count</span><span>{country}</span></div></article>
+      <article className="panel live-empty-panel"><strong>Other dashboard metrics are not available yet</strong><p>Charts, activities, and programme indicators will appear when they are backed by verified records and definitions.</p></article>
+    </section>
+    {error && <div className="form-error" role="alert">{error}<button onClick={onRetry}> Retry</button></div>}
+    <section className="panel recent-panel live-participants-panel">
+      <div className="panel-header"><div><h2>Recently registered participants</h2><p>Authorized records in the selected country scope</p></div><button className="text-link" onClick={onOpenParticipants}>View participant directory →</button></div>
+      {loading ? <p className="live-state">Loading authorized records…</p> : participants.length ? <ParticipantTable participants={participants.slice(0, 4)} onSelect={onSelect} compact /> : <div className="empty-state"><span>⌕</span><strong>No participant records</strong><small>Register a participant if your role permits it.</small></div>}
+    </section>
+  </div>;
+}
+
+function LiveParticipantsPage({ participants, total, loading, error, search, onSearch, onRetry, onAddParticipant, canRegister, onSelect }) {
+  const visibleParticipants = participants.filter((item) => `${item.name} ${item.id} ${item.enterprise} ${item.location}`.toLowerCase().includes(search.toLowerCase()));
+
+  return <div className="page-content records-page">
+    <div className="page-heading"><div><div className="eyebrow"><span className="eyebrow-dot" /> PROGRAM OPERATIONS</div><h1>Participant directory</h1><p>Authenticated participant records visible within your assigned country scope.</p></div>
+      {canRegister && <div className="heading-actions"><button className="button button-primary" onClick={onAddParticipant}>＋ Register participant</button></div>}
+    </div>
+    <div className="records-toolbar live-toolbar"><label className="table-search"><Icon>⌕</Icon><input aria-label="Search participants" placeholder="Search loaded participants..." value={search} onChange={(event) => onSearch(event.target.value)} /></label></div>
+    {error && <div className="form-error" role="alert">{error}<button onClick={onRetry}> Retry</button></div>}
+    <div className="panel records-panel">
+      {loading ? <p className="live-state">Loading authorized participant records…</p> : <ParticipantTable participants={visibleParticipants} onSelect={onSelect} />}
+      <div className="table-footer"><span>Showing <strong>{visibleParticipants.length}</strong> loaded of <strong>{total}</strong> authorized records</span><span>Maximum 100 records loaded; server pagination is not implemented.</span></div>
+    </div>
+    <div className="module-note"><span>ⓘ</span><div><strong>Duplicate screening is limited</strong><p>Exact name and location matches are flagged at registration. A dedicated review and merge workflow is not yet available; possible matches are not merged automatically.</p></div></div>
+  </div>;
 }
 
 export default function App() {
@@ -510,48 +603,262 @@ export default function App() {
   const [profileOpen, setProfileOpen] = useState(false);
   const [addOpen, setAddOpen] = useState(false);
   const [selectedParticipant, setSelectedParticipant] = useState(null);
-  const [participants, setParticipants] = useState(demoParticipants);
+  const demoMode = !supabase && import.meta.env.DEV;
+  const [participants, setParticipants] = useState(demoMode ? demoParticipants : []);
+  const [session, setSession] = useState(null);
+  const [authReady, setAuthReady] = useState(!supabase);
+  const [authError, setAuthError] = useState('');
+  const [access, setAccess] = useState(null);
+  const [accessError, setAccessError] = useState('');
+  const [loading, setLoading] = useState(false);
+  const [dataError, setDataError] = useState('');
+  const [totalParticipants, setTotalParticipants] = useState(0);
+  const [addError, setAddError] = useState('');
+  const [reloadNonce, setReloadNonce] = useState(0);
+
+  useEffect(() => {
+    if (!supabase) return undefined;
+
+    let mounted = true;
+    const { data: authListener } = supabase.auth.onAuthStateChange((_event, nextSession) => {
+      if (!mounted) return;
+      setSession(nextSession);
+      setActive(nextSession ? 'Executive dashboard' : 'Home');
+      setAuthError('');
+    });
+
+    supabase.auth.getSession().then(({ data, error }) => {
+      if (!mounted) return;
+      if (error) setAuthError('Unable to verify your session. Please try signing in again.');
+      setSession(data.session);
+      if (data.session) setActive('Executive dashboard');
+      setAuthReady(true);
+    }).catch(() => {
+      if (!mounted) return;
+      setAuthError('Unable to verify your session. Please reload and try again.');
+      setAuthReady(true);
+    });
+
+    return () => {
+      mounted = false;
+      authListener.subscription.unsubscribe();
+    };
+  }, []);
+
+  useEffect(() => {
+    if (!supabase || !session?.user?.id) {
+      setAccess(null);
+      setAccessError('');
+      return;
+    }
+
+    let mounted = true;
+    setAccess(null);
+    setAccessError('');
+    supabase.from('user_access').select('role,country_codes').eq('user_id', session.user.id).single()
+      .then(({ data, error }) => {
+        if (!mounted) return;
+        if (error || !data) {
+          setAccessError('Your account has no assigned workspace access. Contact your organization administrator.');
+          return;
+        }
+        setAccess(data);
+        if (data.role !== 'system_admin') {
+          const scopedCountries = data.country_codes.map((code) => ({ NG: 'Nigeria', GH: 'Ghana', KE: 'Kenya' }[code]));
+          setCountry((current) => current === 'All countries' || scopedCountries.includes(current) ? current : scopedCountries[0] || 'All countries');
+        }
+      })
+      .catch(() => {
+        if (mounted) setAccessError('Your workspace permissions could not be loaded. Check your connection and retry.');
+      });
+
+    return () => { mounted = false; };
+  }, [session?.user?.id]);
+
+  useEffect(() => {
+    if (!supabase || !session?.user?.id || !access) return undefined;
+
+    let mounted = true;
+    const countryCode = countryCodes[country];
+    if (countryCode && access.role !== 'system_admin' && !access.country_codes.includes(countryCode)) {
+      setDataError('This country is outside your assigned access scope.');
+      return undefined;
+    }
+
+    setLoading(true);
+    setDataError('');
+    let listQuery = supabase.from('participants')
+      .select('id,participant_code,country_code,first_name,last_name,location,enterprise,status,updated_at')
+      .is('archived_at', null)
+      .order('created_at', { ascending: false })
+      .limit(100);
+    let countQuery = supabase.from('participants')
+      .select('id', { count: 'exact', head: true })
+      .is('archived_at', null);
+    if (countryCode) {
+      listQuery = listQuery.eq('country_code', countryCode);
+      countQuery = countQuery.eq('country_code', countryCode);
+    }
+
+    Promise.all([listQuery, countQuery]).then(([listResult, countResult]) => {
+      if (!mounted) return;
+      if (listResult.error || countResult.error) {
+        setDataError('Participant records could not be loaded. Check your connection and retry.');
+        setLoading(false);
+        return;
+      }
+      setParticipants((listResult.data || []).map(toParticipantRecord));
+      setTotalParticipants(countResult.count || 0);
+      setLoading(false);
+    }).catch(() => {
+      if (!mounted) return;
+      setDataError('Participant records could not be loaded. Check your connection and retry.');
+      setLoading(false);
+    });
+
+    return () => { mounted = false; };
+  }, [session?.user?.id, access, country, reloadNonce]);
 
   const visibleParticipants = useMemo(() => participants.filter((person) => (country === 'All countries' || person.country === country) && `${person.name} ${person.id} ${person.enterprise} ${person.location}`.toLowerCase().includes(search.toLowerCase())).sort((a, b) => a.updated.localeCompare(b.updated)), [participants, country, search]);
   const navigate = (label) => { setActive(label); setSearch(''); setNotificationsOpen(false); setProfileOpen(false); setMobileMenuOpen(false); };
-  const openDashboard = () => navigate('Executive dashboard');
-  const handleSave = (form) => {
-    const countryCode = { Nigeria: 'NG', Ghana: 'GH', Kenya: 'KE' }[form.country];
-    const participant = {
-      id: `${countryCode}-26-${String(participants.length + 1).padStart(5, '0')}`,
-      name: `${form.firstName.trim()} ${form.lastName.trim()}`,
-      initials: `${form.firstName.trim()[0]}${form.lastName.trim()[0]}`.toUpperCase(),
-      age: 24,
-      country: form.country,
-      location: form.location.trim(),
-      enterprise: form.enterprise.trim() || 'Not yet assigned',
-      stage: 'Applicant',
-      service: 'Registration submitted',
-      updated: 'Just now',
-      color: 'mint',
-    };
-    setParticipants((current) => [participant, ...current]);
+  const openDashboard = () => navigate(supabase ? (session ? 'Executive dashboard' : 'Sign in') : 'Executive dashboard');
+  const handleSignIn = async (email, password) => {
+    try {
+      const { error } = await supabase.auth.signInWithPassword({ email, password });
+      if (error) setAuthError('Sign-in failed. Check your details or contact your administrator.');
+    } catch {
+      setAuthError('Sign-in service is unavailable. Check your connection and retry.');
+    }
+  };
+  const handleSignOut = async () => {
+    try {
+      const { error } = await supabase.auth.signOut();
+      if (error) setAuthError('Sign-out failed. Please retry.');
+    } catch {
+      setAuthError('Sign-out service is unavailable. Please retry.');
+    }
+  };
+  const handleSave = async (form) => {
+    if (!supabase) {
+      if (!demoMode) return false;
+      const countryCode = countryCodes[form.country];
+      const participant = {
+        id: `${countryCode}-26-${String(participants.length + 1).padStart(5, '0')}`,
+        name: `${form.firstName.trim()} ${form.lastName.trim()}`,
+        initials: `${form.firstName.trim()[0]}${form.lastName.trim()[0]}`.toUpperCase(),
+        age: 24,
+        country: form.country,
+        location: form.location.trim(),
+        enterprise: form.enterprise.trim() || 'Not yet assigned',
+        stage: 'Applicant',
+        service: 'Registration submitted',
+        updated: 'Just now',
+        color: 'mint',
+      };
+      setParticipants((current) => [participant, ...current]);
+      setAddOpen(false);
+      setActive('Participants');
+      setSearch('');
+      return true;
+    }
+
+    if (!access || !['system_admin', 'country_manager', 'field_officer'].includes(access.role)) {
+      setAddError('Your assigned role does not permit participant registration.');
+      return false;
+    }
+
+    const code = countryCodes[form.country];
+    let registration;
+    let registrationError;
+    try {
+      const response = await supabase.rpc('register_participant', {
+        target_country: code,
+        target_first_name: form.firstName.trim(),
+        target_last_name: form.lastName.trim(),
+        target_location: form.location.trim(),
+        target_phone: form.phone.trim() ? normalizePhoneNumber(form.phone) : null,
+        target_enterprise: form.enterprise.trim() || null,
+        consent_confirmed: form.consent,
+      });
+      registration = response.data?.[0];
+      registrationError = response.error;
+    } catch {
+      setAddError('Participant registration is unavailable. No participant was saved.');
+      return false;
+    }
+    if (registrationError || !registration) {
+      setAddError('Participant registration failed validation or authorization. No participant was saved.');
+      return false;
+    }
+    if (registration.result === 'review_required') {
+      setAddError(`Potential match${registration.potential_matches.length === 1 ? '' : 'es'} ${registration.potential_matches.join(', ')} flagged for data-quality review. Request ${registration.duplicate_review_id}; no participant was created.`);
+      return false;
+    }
+    if (registration.result !== 'created') {
+      setAddError('Participant registration returned an unexpected result. No success was reported.');
+      return false;
+    }
+
+    setParticipants((current) => [toParticipantRecord(registration), ...current]);
+    setTotalParticipants((current) => current + 1);
+    setAddError('');
     setAddOpen(false);
     setActive('Participants');
     setSearch('');
+    return true;
   };
   const openSearch = () => { setSearchOpen(true); setNotificationsOpen(false); setProfileOpen(false); };
+  const canRegister = demoMode || ['system_admin', 'country_manager', 'field_officer'].includes(access?.role);
+  const countryOptions = access?.role === 'system_admin'
+    ? countries
+    : ['All countries', ...(access?.country_codes || []).map((code) => ({ NG: 'Nigeria', GH: 'Ghana', KE: 'Kenya' }[code])).filter(Boolean)];
+  const participantCountryOptions = countryOptions.filter((item) => item !== 'All countries');
+  const retryLoad = () => setReloadNonce((value) => value + 1);
+
+  if (supabase && !authReady) {
+    return <main className="auth-page"><p role="status">Checking secure workspace session…</p></main>;
+  }
+
+  if (!supabase && !import.meta.env.DEV && active !== 'Home') {
+    return <ConfigurationNotice onBack={() => setActive('Home')} />;
+  }
+
+  if (supabase && active === 'Sign in') {
+    return <SignInPage onSignIn={handleSignIn} onCancel={() => setActive('Home')} error={authError} />;
+  }
+
+  if (supabase && session && accessError) {
+    return <main className="auth-page"><section className="auth-card" role="alert"><h1>Workspace access not assigned</h1><p>{accessError}</p><button className="button button-secondary" onClick={handleSignOut}>Sign out</button></section></main>;
+  }
+
+  const authLoading = Boolean(supabase && session && !access);
+  if (supabase && session && authLoading && active !== 'Home') {
+    return <main className="auth-page"><p role="status">Loading your assigned workspace…</p></main>;
+  }
 
   return <div className="app-shell">
-    {active === 'Home' ? <Homepage onOpenDashboard={openDashboard} onOpenParticipants={() => navigate('Participants')} /> : <>
-      <Sidebar active={active} onNavigate={navigate} collapsed={collapsed} onToggle={() => setCollapsed((value) => !value)} mobileOpen={mobileMenuOpen} />
+    {active === 'Home' ? <Homepage onOpenDashboard={openDashboard} onOpenParticipants={() => navigate(supabase ? 'Sign in' : 'Participants')} /> : <>
+      <Sidebar active={active} onNavigate={navigate} collapsed={collapsed} onToggle={() => setCollapsed((value) => !value)} mobileOpen={mobileMenuOpen} liveMode={Boolean(supabase)} />
       {mobileMenuOpen && <button className="mobile-drawer-scrim" onClick={() => setMobileMenuOpen(false)} aria-label="Close navigation menu" />}
       <div className="workspace">
-        <Topbar country={country} onCountryChange={setCountry} onSearch={openSearch} onNotify={() => { setNotificationsOpen((value) => !value); setProfileOpen(false); }} notificationsOpen={notificationsOpen} onProfile={() => { setProfileOpen((value) => !value); setNotificationsOpen(false); }} profileOpen={profileOpen} onToggleMenu={() => setMobileMenuOpen((value) => !value)} />
+        <Topbar country={country} onCountryChange={setCountry} onSearch={openSearch} onNotify={() => { setNotificationsOpen((value) => !value); setProfileOpen(false); }} notificationsOpen={notificationsOpen} onProfile={() => { setProfileOpen((value) => !value); setNotificationsOpen(false); }} profileOpen={profileOpen} onToggleMenu={() => setMobileMenuOpen((value) => !value)} user={session?.user} onSignOut={handleSignOut} liveMode={Boolean(supabase)} allowedCountries={countryOptions} />
         <main>
-          {active === 'Executive dashboard' || active === 'Program overview'
-            ? <Dashboard country={country} onCountryChange={setCountry} onNavigate={navigate} participants={visibleParticipants} onSelectParticipant={setSelectedParticipant} onAddParticipant={() => setAddOpen(true)} />
-            : <RecordsPage section={active} country={country} participants={participants} onSelectParticipant={setSelectedParticipant} onAddParticipant={() => setAddOpen(true)} search={search} onSearch={setSearch} />}
+          {supabase ? (
+            active === 'Executive dashboard' || active === 'Program overview'
+              ? <LiveDashboard country={country} totalParticipants={totalParticipants} loading={loading} error={dataError} onRetry={retryLoad} participants={visibleParticipants} onSelect={setSelectedParticipant} onOpenParticipants={() => navigate('Participants')} onAddParticipant={() => { setAddError(''); setAddOpen(true); }} canRegister={canRegister} />
+              : active === 'Participants'
+                ? <LiveParticipantsPage participants={participants} total={totalParticipants} loading={loading} error={dataError} search={search} onSearch={setSearch} onRetry={retryLoad} onAddParticipant={() => { setAddError(''); setAddOpen(true); }} canRegister={canRegister} onSelect={setSelectedParticipant} />
+                : <ProductionModuleNotice section={active} />
+          ) : (
+            active === 'Executive dashboard' || active === 'Program overview'
+              ? <Dashboard country={country} onCountryChange={setCountry} onNavigate={navigate} participants={visibleParticipants} onSelectParticipant={setSelectedParticipant} onAddParticipant={() => setAddOpen(true)} />
+              : <RecordsPage section={active} country={country} participants={participants} onSelectParticipant={setSelectedParticipant} onAddParticipant={() => setAddOpen(true)} search={search} onSearch={setSearch} />
+          )}
         </main>
       </div>
     </>}
-    {addOpen && <ParticipantModal onClose={() => setAddOpen(false)} onSave={handleSave} />}
-    {selectedParticipant && <ParticipantDetail participant={selectedParticipant} onClose={() => setSelectedParticipant(null)} />}
+    {addOpen && <ParticipantModal onClose={() => setAddOpen(false)} onSave={handleSave} error={addError} demoMode={demoMode} allowedCountries={participantCountryOptions.length ? participantCountryOptions : ['Nigeria']} />}
+    {selectedParticipant && <ParticipantDetail participant={selectedParticipant} onClose={() => setSelectedParticipant(null)} demoMode={demoMode} />}
     {searchOpen && <SearchModal onClose={() => setSearchOpen(false)} value={search} onChange={setSearch} onNavigate={navigate} />}
   </div>;
 }
